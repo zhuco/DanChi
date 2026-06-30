@@ -1,0 +1,25 @@
+{
+  "id": "grade8_core",
+  "title": "八年级核心",
+  "description": "八年级核心词汇样例",
+  "stage": "grade8",
+  "version": "1.0.0",
+  "source": "manual-sample",
+  "sortOrder": 10,
+  "words": [
+    {
+      "word": "apply",
+      "unit": "Unit 3",
+      "level": "grade8",
+      "tags": ["core", "exam"],
+      "priority": 5
+    },
+    {
+      "word": "book",
+      "unit": "Unit 1",
+      "level": "grade8",
+      "tags": ["core"],
+      "priority": 3
+    }
+  ]
+}

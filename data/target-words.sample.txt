@@ -1,0 +1,7 @@
+# One target word per line. Replace this sample with the app's real target list,
+# or pass app/src/main/assets/wordbooks/zhongkao_words.json to preserve current ids.
+apple
+apply
+beautiful
+run
+book

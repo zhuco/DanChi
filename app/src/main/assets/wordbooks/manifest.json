@@ -1,0 +1,12 @@
+[
+  {
+    "id": "zhongkao",
+    "title": "初中中考",
+    "description": "中考核心词汇离线词库",
+    "sourceFile": "初中中考.txt",
+    "assetPath": "wordbooks/zhongkao_words.json",
+    "version": "1.1.0",
+    "wordCount": 1974,
+    "sortOrder": 0
+  }
+]
