@@ -1,4 +1,4 @@
-﻿package com.danchi.app.ui
+package com.danchi.app.ui
 
 import android.app.Application
 import androidx.lifecycle.ViewModel
@@ -8,22 +8,15 @@ import com.danchi.app.audio.AnswerFeedbackSound
 import com.danchi.app.audio.DanChiTts
 import com.danchi.app.data.DanChiRepository
 import com.danchi.app.domain.Accent
-import com.danchi.app.domain.FirmCardKind
-import com.danchi.app.domain.FirmStudyCard
-import com.danchi.app.domain.FirmTodaySummary
 import com.danchi.app.domain.FsrsBuildProgress
 import com.danchi.app.domain.FsrsStudyItem
 import com.danchi.app.domain.LibraryStats
-import com.danchi.app.domain.ReviewGrade
 import com.danchi.app.domain.StudyProfileStats
 import com.danchi.app.domain.StudySettings
 import com.danchi.app.domain.StudyWordOrder
 import com.danchi.app.domain.TodayPlan
 import com.danchi.app.domain.Word
 import com.danchi.app.domain.WordbookProgress
-import com.danchi.app.domain.WordStudyRecord
-import com.danchi.app.domain.displayMeanings
-import com.danchi.app.domain.meaningChoiceOptionId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -41,7 +34,7 @@ import java.time.ZonedDateTime
 data class UiState(
     val seededCount: Int = 0,
     val activeTab: MainTab = MainTab.Home,
-    val sessionMode: SessionMode = SessionMode.NewWords,
+    val sessionMode: SessionMode = SessionMode.Today,
     val session: List<Word> = emptyList(),
     val fsrsSession: List<FsrsStudyItem> = emptyList(),
     val fsrsSessionId: String = "",
@@ -51,16 +44,6 @@ data class UiState(
     val fsrsTailBuildTitle: String = "",
     val currentIndex: Int = 0,
     val query: String = "",
-    val spellingInput: String = "",
-    val spellingResult: Boolean? = null,
-    val firmCard: FirmStudyCard = FirmStudyCard(FirmCardKind.Done),
-    val firmSummary: FirmTodaySummary = FirmTodaySummary(),
-    val firmCardIndex: Int = 0,
-    val firmSelectedOptionId: String? = null,
-    val firmCorrectOptionId: String? = null,
-    val firmChoiceCorrect: Boolean? = null,
-    val firmForgetDetailWord: Word? = null,
-    val firmDetailRecord: WordStudyRecord? = null,
     val fsrsAnswerStartedAt: Long = 0L,
     val fsrsAnswered: Boolean = false,
     val fsrsSelectedOptionId: String? = null,
@@ -75,14 +58,7 @@ data class UiState(
     val message: String? = null
 ) {
     val currentFsrsItem: FsrsStudyItem? get() = fsrsSession.getOrNull(currentIndex)
-
-    val currentWord: Word? get() = if (sessionMode == SessionMode.Firm) {
-        firmForgetDetailWord ?: firmCard.word ?: firmCard.previewWords.firstOrNull()
-    } else if (sessionMode == SessionMode.Today) {
-        currentFsrsItem?.word
-    } else {
-        session.getOrNull(currentIndex)
-    }
+    val currentWord: Word? get() = currentFsrsItem?.word
 }
 
 enum class MainTab(val label: String) {
@@ -94,13 +70,7 @@ enum class MainTab(val label: String) {
 }
 
 enum class SessionMode(val label: String) {
-    Today("今日学习"),
-    Firm("牢记模式"),
-    NewWords("新学"),
-    Review("复习"),
-    Spelling("拼写"),
-    Meaning("选义"),
-    Dictation("听写")
+    Today("今日学习")
 }
 
 data class DanChiScreenState(
@@ -177,7 +147,7 @@ class DanChiViewModel(
         uiState.update { it.copy(query = query) }
     }
 
-    fun startSession(mode: SessionMode) {
+    fun startSession(mode: SessionMode = SessionMode.Today) {
         viewModelScope.launch {
             uiState.update {
                 it.copy(
@@ -185,12 +155,7 @@ class DanChiViewModel(
                     sessionMode = mode,
                     activeTab = MainTab.Study,
                     currentIndex = 0,
-                    firmCardIndex = 0,
-                    firmSelectedOptionId = null,
-                    firmCorrectOptionId = null,
-                    firmChoiceCorrect = null,
-                    firmForgetDetailWord = null,
-                    firmDetailRecord = null,
+                    session = emptyList(),
                     fsrsSession = emptyList(),
                     fsrsSessionId = "",
                     fsrsTotalCount = 0,
@@ -203,86 +168,17 @@ class DanChiViewModel(
                     fsrsCorrectOptionId = null,
                     fsrsAnswerCorrect = null,
                     fsrsInfoVisible = false,
-                    spellingInput = "",
-                    spellingResult = null,
-                    loadingTitle = if (mode == SessionMode.Today) "正在准备今日提分" else "正在准备学习队列",
-                    loadingDetail = if (mode == SessionMode.Today) {
-                        "正在检查是否已有今日清单。"
-                    } else {
-                        "正在读取当前模式的学习内容。"
-                    },
+                    loadingTitle = "正在准备今日提分",
+                    loadingDetail = "正在检查是否已有今日清单。",
                     loadingProgress = 0.05f,
                     message = null
                 )
             }
+
             val settings = screenState.value.settings
-            if (mode == SessionMode.Today) {
-                val snapshot = withContext(Dispatchers.Default) {
-                    repository.buildTodayFsrsSession(settings) { progress ->
-                        updateLoadingProgress(progress)
-                    }
-                }
-                uiState.update {
-                    it.copy(
-                        busy = false,
-                        loadingTitle = "",
-                        loadingDetail = "",
-                        loadingProgress = 0f,
-                        session = snapshot.items.map { item -> item.word },
-                        fsrsSession = snapshot.items,
-                        fsrsSessionId = snapshot.sessionId,
-                        fsrsTotalCount = snapshot.totalCount,
-                        fsrsCompletedCount = snapshot.completedCount,
-                        fsrsTailBuilding = snapshot.isBuilding,
-                        fsrsTailBuildTitle = if (snapshot.isBuilding) "正在准备后续题目" else "",
-                        currentIndex = snapshot.currentPosition,
-                        fsrsAnswerStartedAt = System.currentTimeMillis(),
-                        noteDraft = snapshot.items.getOrNull(snapshot.currentPosition)?.word?.note.orEmpty(),
-                        message = if (snapshot.items.isEmpty() || snapshot.currentPosition >= snapshot.totalCount) "今日没有待学习内容" else if (snapshot.isResumed) "继续今日提分" else null
-                    )
-                }
-                snapshot.items.getOrNull(snapshot.currentPosition)?.word?.let {
-                    if (settings.autoPlayWord) autoSpeak(it)
-                }
-                if (snapshot.isBuilding) {
-                    continueTodayFsrsBuild(settings, snapshot.sessionId)
-                }
-                return@launch
-            }
-            if (mode == SessionMode.Firm) {
-                val resumeIndex = repository.resumeFirmCardIndex(settings)
-                val card = repository.buildFirmCard(settings, resumeIndex)
-                val summary = repository.firmTodaySummary(settings)
-                uiState.update {
-                    it.copy(
-                        busy = false,
-                        loadingTitle = "",
-                        loadingDetail = "",
-                        loadingProgress = 0f,
-                        session = emptyList(),
-                        firmCard = card,
-                        firmSummary = summary,
-                        firmCardIndex = resumeIndex,
-                        noteDraft = card.word?.note.orEmpty(),
-                        message = if (card.kind == FirmCardKind.Done) "今日已完成" else null
-                    )
-                }
-                card.word?.let { if (settings.autoPlayWord) autoSpeak(it) }
-                return@launch
-            }
-            val words = when (mode) {
-                SessionMode.Today -> emptyList()
-                SessionMode.Firm -> emptyList()
-                SessionMode.NewWords -> repository.buildNewSession(settings)
-                SessionMode.Review -> repository.buildReviewSession(settings.selectedWordbookId, settings.reviewLimit)
-                SessionMode.Spelling -> repository.buildReviewSession(settings.selectedWordbookId, settings.reviewLimit).ifEmpty {
-                    repository.buildNewSession(settings)
-                }
-                SessionMode.Meaning -> repository.buildReviewSession(settings.selectedWordbookId, settings.reviewLimit).ifEmpty {
-                    repository.buildNewSession(settings)
-                }
-                SessionMode.Dictation -> repository.buildReviewSession(settings.selectedWordbookId, settings.reviewLimit).ifEmpty {
-                    repository.buildNewSession(settings)
+            val snapshot = withContext(Dispatchers.Default) {
+                repository.buildTodayFsrsSession(settings) { progress ->
+                    updateLoadingProgress(progress)
                 }
             }
             uiState.update {
@@ -291,12 +187,29 @@ class DanChiViewModel(
                     loadingTitle = "",
                     loadingDetail = "",
                     loadingProgress = 0f,
-                    session = words,
-                    noteDraft = words.firstOrNull()?.note.orEmpty(),
-                    message = if (words.isEmpty()) "当前没有可学习词条" else null
+                    session = snapshot.items.map { item -> item.word },
+                    fsrsSession = snapshot.items,
+                    fsrsSessionId = snapshot.sessionId,
+                    fsrsTotalCount = snapshot.totalCount,
+                    fsrsCompletedCount = snapshot.completedCount,
+                    fsrsTailBuilding = snapshot.isBuilding,
+                    fsrsTailBuildTitle = if (snapshot.isBuilding) "正在准备后续题目" else "",
+                    currentIndex = snapshot.currentPosition,
+                    fsrsAnswerStartedAt = System.currentTimeMillis(),
+                    noteDraft = snapshot.items.getOrNull(snapshot.currentPosition)?.word?.note.orEmpty(),
+                    message = when {
+                        snapshot.items.isEmpty() || snapshot.currentPosition >= snapshot.totalCount -> "今日没有待学习内容"
+                        snapshot.isResumed -> "继续今日提分"
+                        else -> null
+                    }
                 )
             }
-            if (words.isNotEmpty() && settings.autoPlayWord) autoSpeak(words.first())
+            snapshot.items.getOrNull(snapshot.currentPosition)?.word?.let {
+                if (settings.autoPlayWord) autoSpeak(it)
+            }
+            if (snapshot.isBuilding) {
+                continueTodayFsrsBuild(settings, snapshot.sessionId)
+            }
         }
     }
 
@@ -310,21 +223,35 @@ class DanChiViewModel(
         }
     }
 
-    fun gradeCurrent(grade: ReviewGrade) {
-        val word = uiState.value.currentWord ?: return
-        viewModelScope.launch {
-            repository.grade(word, grade)
-            moveNext()
-        }
-    }
-
-    fun answerMeaningPractice(correct: Boolean) {
-        playAnswerFeedback(correct)
-        gradeCurrent(if (correct) ReviewGrade.Good else ReviewGrade.Again)
-    }
-
     fun answerCurrentRecognition(optionId: String) {
-        answerCurrentRecognition(optionId = optionId, selectedOptionId = optionId)
+        val state = uiState.value
+        val item = state.currentFsrsItem ?: return
+        if (state.fsrsAnswered) return
+        viewModelScope.launch {
+            val duration = (System.currentTimeMillis() - state.fsrsAnswerStartedAt).coerceAtLeast(0L)
+            val selectedWordId = item.options.firstOrNull { it.id == optionId }?.wordId ?: optionId
+            val correctOptionId = item.options.firstOrNull { it.wordId == item.word.id }?.id ?: item.word.id
+            val correct = repository.answerRecognition(
+                cardId = item.cardId,
+                selectedWordId = selectedWordId,
+                options = item.options.map { it.wordId },
+                durationMs = duration,
+                studySettings = screenState.value.settings,
+                selectedOptionId = optionId
+            )
+            playAnswerFeedback(correct)
+            uiState.update {
+                it.copy(
+                    fsrsAnswered = true,
+                    fsrsSelectedOptionId = optionId,
+                    fsrsCorrectOptionId = correctOptionId,
+                    fsrsAnswerCorrect = correct,
+                    fsrsInfoVisible = false,
+                    fsrsCompletedCount = (it.fsrsCompletedCount + 1).coerceAtMost(it.fsrsTotalCount),
+                    noteDraft = item.word.note.orEmpty()
+                )
+            }
+        }
     }
 
     fun revealCurrentRecognitionAnswer() {
@@ -347,44 +274,9 @@ class DanChiViewModel(
         }
     }
 
-    private fun answerCurrentRecognition(optionId: String, selectedOptionId: String?) {
-        val state = uiState.value
-        val item = state.currentFsrsItem ?: return
-        if (state.fsrsAnswered) return
-        viewModelScope.launch {
-            val duration = (System.currentTimeMillis() - state.fsrsAnswerStartedAt).coerceAtLeast(0L)
-            val selectedWordId = selectedOptionId
-                ?.let { id -> item.options.firstOrNull { it.id == id }?.wordId }
-                ?: optionId
-            val correctOptionId = item.options.firstOrNull { it.wordId == item.word.id }?.id ?: item.word.id
-            val correct = repository.answerRecognition(
-                cardId = item.cardId,
-                selectedWordId = selectedWordId,
-                options = item.options.map { it.wordId },
-                durationMs = duration,
-                studySettings = screenState.value.settings,
-                selectedOptionId = optionId
-            )
-            if (selectedOptionId != null) {
-                playAnswerFeedback(correct)
-            }
-            uiState.update {
-                it.copy(
-                    fsrsAnswered = true,
-                    fsrsSelectedOptionId = selectedOptionId,
-                    fsrsCorrectOptionId = correctOptionId,
-                    fsrsAnswerCorrect = correct,
-                    fsrsInfoVisible = false,
-                    fsrsCompletedCount = (it.fsrsCompletedCount + 1).coerceAtMost(it.fsrsTotalCount),
-                    noteDraft = item.word.note.orEmpty()
-                )
-            }
-        }
-    }
-
     fun continueAfterFsrsAnswer() {
         val state = uiState.value
-        if (state.sessionMode == SessionMode.Today && state.fsrsAnswered && !state.fsrsInfoVisible) {
+        if (state.fsrsAnswered && !state.fsrsInfoVisible) {
             if (state.fsrsAnswerCorrect == null) {
                 val item = state.currentFsrsItem ?: return
                 viewModelScope.launch {
@@ -405,9 +297,7 @@ class DanChiViewModel(
                             fsrsCompletedCount = (it.fsrsCompletedCount + 1).coerceAtMost(it.fsrsTotalCount)
                         )
                     }
-                    state.currentWord?.let { word ->
-                        if (screenState.value.settings.autoPlayWord) autoSpeak(word)
-                    }
+                    if (screenState.value.settings.autoPlayWord) autoSpeak(item.word)
                 }
                 return
             }
@@ -420,93 +310,13 @@ class DanChiViewModel(
         }
     }
 
-    fun completeFirmPreview() {
-        val card = uiState.value.firmCard
-        viewModelScope.launch {
-            repository.completeFirmPreview(card.previewRecords.map { it.wordId })
-            advanceFirmCard()
-        }
-    }
-
-    fun selectFirmChoice(optionId: String) {
-        val state = uiState.value
-        val word = state.firmCard.word ?: return
-        if (state.firmSelectedOptionId != null) return
-        val correctMeaningId = word.displayMeanings.firstOrNull()?.id ?: word.id
-        val correctOptionId = meaningChoiceOptionId(word.id, correctMeaningId)
-        viewModelScope.launch {
-            val correct = optionId == correctOptionId
-            repository.selectFirmChoice(word.id, correct)
-            playAnswerFeedback(correct)
-            uiState.update {
-                it.copy(
-                    firmSelectedOptionId = optionId,
-                    firmCorrectOptionId = correctOptionId,
-                    firmChoiceCorrect = correct
-                )
-            }
-        }
-    }
-
-    fun continueAfterFirmChoice() {
-        val word = uiState.value.firmCard.word ?: return
-        viewModelScope.launch {
-            repository.moveFirmChoiceToDetail(word.id)
-            advanceFirmCard()
-        }
-    }
-
-    fun firmDetailNext() {
-        val state = uiState.value
-        val word = state.firmForgetDetailWord ?: state.firmCard.word ?: return
-        viewModelScope.launch {
-            if (state.firmForgetDetailWord == null) {
-                repository.moveFirmDetailToLearning(word.id, state.firmCardIndex)
-            }
-            advanceFirmCard()
-        }
-    }
-
-    fun firmRemember() {
-        val word = uiState.value.firmCard.word ?: return
-        viewModelScope.launch {
-            val record = repository.firmRemember(word.id, uiState.value.firmCardIndex)
-            uiState.update { it.copy(firmForgetDetailWord = word, firmDetailRecord = record) }
-            if (screenState.value.settings.autoPlayWord) autoSpeak(word)
-        }
-    }
-
-    fun firmForget() {
-        val word = uiState.value.firmCard.word ?: return
-        viewModelScope.launch {
-            val record = repository.firmForget(word.id, uiState.value.firmCardIndex)
-            uiState.update { it.copy(firmForgetDetailWord = word, firmDetailRecord = record) }
-            if (screenState.value.settings.autoPlayWord) autoSpeak(word)
-        }
-    }
-
-    fun submitSpelling() {
-        val state = uiState.value
-        val word = state.currentWord ?: return
-        viewModelScope.launch {
-            val correct = repository.submitSpelling(word, state.spellingInput)
-            uiState.update { it.copy(spellingResult = correct) }
-        }
-    }
-
-    fun updateSpellingInput(value: String) {
-        uiState.update { it.copy(spellingInput = value, spellingResult = null) }
-    }
-
     fun moveNext() {
         val current = uiState.value
         val nextIndex = current.currentIndex + 1
-        val nextWord = current.session.getOrNull(nextIndex)
+        val nextWord = current.fsrsSession.getOrNull(nextIndex)?.word
         uiState.update {
             it.copy(
-                currentIndex = nextIndex.coerceAtMost(current.session.size),
-                spellingInput = "",
-                spellingResult = null,
+                currentIndex = nextIndex.coerceAtMost(current.fsrsSession.size),
                 fsrsAnswerStartedAt = System.currentTimeMillis(),
                 fsrsAnswered = false,
                 fsrsSelectedOptionId = null,
@@ -514,7 +324,7 @@ class DanChiViewModel(
                 fsrsAnswerCorrect = null,
                 fsrsInfoVisible = false,
                 noteDraft = nextWord?.note.orEmpty(),
-                message = if (nextWord == null) "学习已完成" else null
+                message = if (nextWord == null && !it.fsrsTailBuilding) "学习已完成" else null
             )
         }
         if (nextWord != null && screenState.value.settings.autoPlayWord) autoSpeak(nextWord)
@@ -542,18 +352,13 @@ class DanChiViewModel(
     }
 
     fun markCurrentMastered(muteConfirmToday: Boolean = false) {
-        val state = uiState.value
-        val word = state.currentWord ?: return
+        val word = uiState.value.currentWord ?: return
         viewModelScope.launch {
             if (muteConfirmToday) {
                 repository.updateMasteryConfirmMutedUntil(endOfBeijingDayMillis())
             }
             repository.markMastered(word)
-            if (state.sessionMode == SessionMode.Firm) {
-                advanceFirmCard()
-            } else {
-                removeCurrentWordFromSession()
-            }
+            removeCurrentWordFromSession()
             uiState.update { it.copy(message = "已标记熟练") }
         }
     }
@@ -571,12 +376,13 @@ class DanChiViewModel(
     }
 
     fun updateDailyNew(value: Int) = viewModelScope.launch { repository.updateDailyNew(value) }
-    fun updateReviewLimit(value: Int) = viewModelScope.launch { repository.updateReviewLimit(value) }
     fun updateAutoPlayWord(value: Boolean) = viewModelScope.launch { repository.updateAutoPlayWord(value) }
     fun updateAutoPlayExample(value: Boolean) = viewModelScope.launch { repository.updateAutoPlayExample(value) }
-    fun updateEnableNewWordPreview(value: Boolean) = viewModelScope.launch { repository.updateEnableNewWordPreview(value) }
     fun updateDailyMinutes(value: Int) = viewModelScope.launch { repository.updateDailyMinutes(value) }
     fun updateWordOrder(value: StudyWordOrder) = viewModelScope.launch { repository.updateWordOrder(value) }
+    fun updateAccent(value: Accent) = viewModelScope.launch { repository.updateAccent(value) }
+    fun updateSpeechRate(value: Float) = viewModelScope.launch { repository.updateSpeechRate(value) }
+    fun updateAutoPlayRepeatCount(value: Int) = viewModelScope.launch { repository.updateAutoPlayRepeatCount(value) }
     fun updateSelectedWordbook(wordbookId: String) = viewModelScope.launch {
         repository.updateSelectedWordbook(wordbookId)
         uiState.update {
@@ -589,14 +395,16 @@ class DanChiViewModel(
                 fsrsTailBuilding = false,
                 fsrsTailBuildTitle = "",
                 currentIndex = 0,
-                firmCard = FirmStudyCard(FirmCardKind.Done),
-                firmSummary = FirmTodaySummary(),
-                firmCardIndex = 0,
                 query = "",
                 noteDraft = "",
                 message = "已切换词库"
             )
         }
+    }
+
+    fun toggleAccent() {
+        val next = if (screenState.value.settings.accent == Accent.Us) Accent.Uk else Accent.Us
+        updateAccent(next)
     }
 
     private fun continueTodayFsrsBuild(settings: StudySettings, sessionId: String) {
@@ -630,33 +438,17 @@ class DanChiViewModel(
             }
         }
     }
-    fun updateAccent(value: Accent) = viewModelScope.launch { repository.updateAccent(value) }
-    fun updateSpeechRate(value: Float) = viewModelScope.launch { repository.updateSpeechRate(value) }
-    fun updateAutoPlayRepeatCount(value: Int) = viewModelScope.launch { repository.updateAutoPlayRepeatCount(value) }
-    fun toggleAccent() {
-        val next = if (screenState.value.settings.accent == Accent.Us) Accent.Uk else Accent.Us
-        updateAccent(next)
-    }
 
     private fun removeCurrentWordFromSession() {
         val current = uiState.value
-        val nextSession = current.session.filterIndexed { index, _ -> index != current.currentIndex }
         val nextFsrsSession = current.fsrsSession.filterIndexed { index, _ -> index != current.currentIndex }
-        val hasFsrsSession = current.fsrsSession.isNotEmpty()
-        val nextCount = if (hasFsrsSession) nextFsrsSession.size else nextSession.size
-        val nextIndex = current.currentIndex.coerceAtMost((nextCount - 1).coerceAtLeast(0))
-        val nextWord = if (hasFsrsSession) {
-            nextFsrsSession.getOrNull(nextIndex)?.word
-        } else {
-            nextSession.getOrNull(nextIndex)
-        }
+        val nextIndex = current.currentIndex.coerceAtMost((nextFsrsSession.size - 1).coerceAtLeast(0))
+        val nextWord = nextFsrsSession.getOrNull(nextIndex)?.word
         uiState.update {
             it.copy(
-                session = nextSession,
+                session = nextFsrsSession.map { item -> item.word },
                 fsrsSession = nextFsrsSession,
-                currentIndex = if (nextCount == 0) 0 else nextIndex,
-                spellingInput = "",
-                spellingResult = null,
+                currentIndex = if (nextFsrsSession.isEmpty()) 0 else nextIndex,
                 fsrsAnswerStartedAt = System.currentTimeMillis(),
                 fsrsAnswered = false,
                 fsrsSelectedOptionId = null,
@@ -678,28 +470,6 @@ class DanChiViewModel(
             .atZone(zone)
             .toInstant()
             .toEpochMilli()
-    }
-
-    private suspend fun advanceFirmCard() {
-        val nextIndex = uiState.value.firmCardIndex + 1
-        val settings = screenState.value.settings
-        val card = repository.buildFirmCard(settings, nextIndex)
-        val summary = repository.firmTodaySummary(settings)
-        uiState.update {
-            it.copy(
-                firmCard = card,
-                firmSummary = summary,
-                firmCardIndex = nextIndex,
-                firmSelectedOptionId = null,
-                firmCorrectOptionId = null,
-                firmChoiceCorrect = null,
-                firmForgetDetailWord = null,
-                firmDetailRecord = null,
-                noteDraft = card.word?.note.orEmpty(),
-                message = if (card.kind == FirmCardKind.Done) "今日已完成" else null
-            )
-        }
-        card.word?.let { if (settings.autoPlayWord) autoSpeak(it) }
     }
 
     override fun onCleared() {

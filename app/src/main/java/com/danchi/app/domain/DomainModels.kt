@@ -67,19 +67,11 @@ enum class WordStatus {
     Mastered
 }
 
-enum class ReviewGrade(val label: String, val quality: Int) {
-    Again("再记", 1),
-    Hard("模糊", 2),
-    Good("认识", 3),
-    Easy("熟悉", 4)
-}
-
 data class StudySettings(
     val dailyNewWords: Int = 10,
     val reviewLimit: Int = 50,
     val autoPlayWord: Boolean = true,
     val autoPlayExample: Boolean = false,
-    val enableNewWordPreview: Boolean = true,
     val selectedWordbookId: String = WordbookDefaults.DefaultId,
     val wordOrder: StudyWordOrder = StudyWordOrder.Alphabetical,
     val accent: Accent = Accent.Us,
@@ -94,68 +86,6 @@ enum class StudyWordOrder(val label: String) {
     Random("随机"),
     Alphabetical("字母排序")
 }
-
-enum class FirmStudyStatus {
-    New,
-    Preview,
-    Intro,
-    Detail,
-    Learning,
-    DayDone,
-    ReviewDue,
-    Mastered
-}
-
-data class WordStudyRecord(
-    val wordId: String,
-    val status: FirmStudyStatus = FirmStudyStatus.New,
-    val todayRememberCount: Int = 0,
-    val requiredRememberCount: Int = FirmModeConfig.requiredRememberCount,
-    val todayForgetCount: Int = 0,
-    val todayWrongChoiceCount: Int = 0,
-    val previewSeen: Boolean = false,
-    val previewSeenAt: Long? = null,
-    val reviewLevel: Int = 0,
-    val intervalDays: Int = 0,
-    val lastShownAt: Long = 0L,
-    val nextDueAt: Long = 0L,
-    val lastShownCardIndex: Int = 0,
-    val nextDueCardIndex: Int = 0,
-    val firstLearnedAt: Long? = null,
-    val lastReviewedAt: Long? = null,
-    val completedTodayAt: Long? = null,
-    val studyDayEpoch: Long = 0L
-)
-
-enum class FirmCardKind {
-    Preview,
-    Intro,
-    Detail,
-    Recall,
-    Done
-}
-
-data class FirmStudyCard(
-    val kind: FirmCardKind,
-    val word: Word? = null,
-    val record: WordStudyRecord? = null,
-    val previewWords: List<Word> = emptyList(),
-    val previewRecords: List<WordStudyRecord> = emptyList(),
-    val groupDoneCount: Int = 0,
-    val groupTotalCount: Int = 0,
-    val todayNewStartedCount: Int = 0,
-    val todayNewLimit: Int = 0,
-    val isReview: Boolean = false
-)
-
-data class FirmTodaySummary(
-    val todayNewWords: Int = 0,
-    val todayReviewWords: Int = 0,
-    val todayCompletedWords: Int = 0,
-    val todayForgetCount: Int = 0,
-    val todayWrongChoiceCount: Int = 0,
-    val previewEnabled: Boolean = true
-)
 
 data class FsrsStudyItem(
     val cardId: Long,
@@ -182,22 +112,6 @@ data class FsrsBuildProgress(
 ) {
     val fraction: Float
         get() = if (totalSteps <= 0) 0f else (step.toFloat() / totalSteps).coerceIn(0f, 1f)
-}
-
-object FirmModeConfig {
-    const val mode = "firm"
-    const val name = "牢记模式"
-    const val groupSize = 3
-    const val requiredRememberCount = 3
-    const val minDelayCards = 2
-    const val minDelaySeconds = 60
-    const val forgetDelaySeconds = 30
-    const val wrongChoicePenalty = true
-    const val forgetPenalty = true
-    const val showDetailAfterChoice = true
-    const val showDetailAfterForget = true
-    const val enableNewWordPreview = true
-    const val dailyNewWordsLimit = 100
 }
 
 object StudyPlanOptions {
@@ -245,8 +159,7 @@ data class LibraryStats(
     val review: Int = 0,
     val mastered: Int = 0,
     val favorite: Int = 0,
-    val notes: Int = 0,
-    val spellingAccuracy: Float = 0f
+    val notes: Int = 0
 ) {
     val learned: Int get() = learning + review + mastered
     val progress: Float get() = if (total == 0) 0f else learned.toFloat() / total

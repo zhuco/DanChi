@@ -11,8 +11,6 @@ import androidx.room.RoomDatabase
         CardEntity::class,
         ReviewLogEntity::class,
         NoteEntity::class,
-        WordStudyRecordEntity::class,
-        TodayFsrsSessionItemEntity::class,
         UserFsrsSettingEntity::class,
         LocalWordbookEntity::class,
         LocalWordbookWordEntity::class,
@@ -25,7 +23,7 @@ import androidx.room.RoomDatabase
         UserFavoriteWordEntity::class,
         UserWordNoteEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 abstract class DanChiDatabase : RoomDatabase() {
@@ -35,8 +33,6 @@ abstract class DanChiDatabase : RoomDatabase() {
     abstract fun cardDao(): CardDao
     abstract fun reviewDao(): ReviewDao
     abstract fun noteDao(): NoteDao
-    abstract fun wordStudyRecordDao(): WordStudyRecordDao
-    abstract fun todayFsrsSessionDao(): TodayFsrsSessionDao
     abstract fun userFsrsSettingDao(): UserFsrsSettingDao
     abstract fun learningStateDao(): LearningStateDao
 }

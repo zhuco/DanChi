@@ -25,7 +25,6 @@ class SettingsStore(private val context: Context) {
         val ReviewLimit = intPreferencesKey("review_limit")
         val AutoPlayWord = booleanPreferencesKey("auto_play_word")
         val AutoPlayExample = booleanPreferencesKey("auto_play_example")
-        val EnableNewWordPreview = booleanPreferencesKey("enable_new_word_preview")
         val SelectedWordbookId = stringPreferencesKey("selected_wordbook_id")
         val WordOrder = stringPreferencesKey("word_order")
         val Accent = stringPreferencesKey("accent")
@@ -44,7 +43,6 @@ class SettingsStore(private val context: Context) {
             reviewLimit = values[Keys.ReviewLimit]?.coerceAtLeast(1) ?: defaultReviewLimit,
             autoPlayWord = values[Keys.AutoPlayWord] ?: true,
             autoPlayExample = values[Keys.AutoPlayExample] ?: false,
-            enableNewWordPreview = values[Keys.EnableNewWordPreview] ?: true,
             selectedWordbookId = values[Keys.SelectedWordbookId] ?: WordbookDefaults.DefaultId,
             wordOrder = runCatching {
                 StudyWordOrder.valueOf(values[Keys.WordOrder] ?: StudyWordOrder.Alphabetical.name)
@@ -77,10 +75,6 @@ class SettingsStore(private val context: Context) {
 
     suspend fun updateAutoPlayExample(value: Boolean) {
         context.settingsDataStore.edit { it[Keys.AutoPlayExample] = value }
-    }
-
-    suspend fun updateEnableNewWordPreview(value: Boolean) {
-        context.settingsDataStore.edit { it[Keys.EnableNewWordPreview] = value }
     }
 
     suspend fun updateSelectedWordbook(wordbookId: String) {

@@ -1,21 +1,10 @@
 package com.danchi.app.data
 
-import com.danchi.app.domain.FirmStudyStatus
 import com.danchi.app.domain.WordStatus
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class EntityMappingTest {
-    @Test
-    fun invalidFirmStatusFallsBackToNewInsteadOfCrashing() {
-        val record = WordStudyRecordEntity(
-            wordId = "w1",
-            status = "UnknownStatus"
-        ).toDomain()
-
-        assertEquals(FirmStudyStatus.New, record.status)
-    }
-
     @Test
     fun blankLexicalFieldsUseReadableFallbacks() {
         val word = WordEntity(

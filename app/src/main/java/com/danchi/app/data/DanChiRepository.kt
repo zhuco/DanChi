@@ -1,23 +1,13 @@
 package com.danchi.app.data
 
 import android.content.Context
-import com.danchi.app.domain.FirmCardKind
 import com.danchi.app.domain.DictionaryEntry
 import com.danchi.app.domain.DictionaryRepository
-import com.danchi.app.domain.FirmModeConfig
-import com.danchi.app.domain.FirmStudyCard
-import com.danchi.app.domain.FirmStudyMachine
-import com.danchi.app.domain.FirmStudyStatus
 import com.danchi.app.domain.FsrsBuildProgress
 import com.danchi.app.domain.FsrsSessionSnapshot
-import com.danchi.app.domain.FirmTodaySummary
 import com.danchi.app.domain.FsrsStudyItem
 import com.danchi.app.domain.LibraryStats
 import com.danchi.app.domain.MeaningChoiceOption
-import com.danchi.app.domain.ReviewGrade
-import com.danchi.app.domain.ReviewScheduler
-import com.danchi.app.domain.ReviewState
-import com.danchi.app.domain.SpellingJudge
 import com.danchi.app.domain.StudyProfileStats
 import com.danchi.app.domain.StudySettings
 import com.danchi.app.domain.StudyWordOrder
@@ -25,7 +15,6 @@ import com.danchi.app.domain.TodayPlan
 import com.danchi.app.domain.Word
 import com.danchi.app.domain.Wordbook
 import com.danchi.app.domain.WordbookProgress
-import com.danchi.app.domain.WordStudyRecord
 import com.danchi.app.domain.WordStatus
 import com.danchi.app.domain.WordPatch
 import com.danchi.app.scheduler.AnswerCardInput
@@ -50,8 +39,6 @@ class DanChiRepository(
     private val cardDao: CardDao,
     private val reviewDao: ReviewDao,
     private val noteDao: NoteDao,
-    private val wordStudyRecordDao: WordStudyRecordDao,
-    private val todayFsrsSessionDao: TodayFsrsSessionDao,
     private val userFsrsSettingDao: UserFsrsSettingDao,
     private val learningStateDao: LearningStateDao,
     private val dictionaryRepository: DictionaryRepository
@@ -106,9 +93,7 @@ class DanChiRepository(
                 wordDao.observeStatusCount(wordbookId, WordStatus.Review.name),
                 wordDao.observeStatusCount(wordbookId, WordStatus.Mastered.name),
                 wordDao.observeFavoriteCount(wordbookId),
-                noteDao.observeNoteCount(wordbookId),
-                reviewDao.observeSpellingTotal(wordbookId),
-                reviewDao.observeSpellingCorrect(wordbookId)
+                noteDao.observeNoteCount(wordbookId)
             ) { values ->
                 val newWords = values[0] as Int
                 val learned = values[1] as Int
@@ -117,8 +102,6 @@ class DanChiRepository(
                 val mastered = values[4] as Int
                 val favorite = values[5] as Int
                 val notes = values[6] as Int
-                val spellingTotal = values[7] as Int
-                val spellingCorrect = values[8] as Int
                 LibraryStats(
                     total = newWords + learned,
                     newWords = newWords,
@@ -126,8 +109,7 @@ class DanChiRepository(
                     review = review,
                     mastered = mastered,
                     favorite = favorite,
-                    notes = notes,
-                    spellingAccuracy = if (spellingTotal == 0) 0f else spellingCorrect.toFloat() / spellingTotal
+                    notes = notes
                 )
             }
         }
@@ -136,26 +118,15 @@ class DanChiRepository(
     fun observeTodayPlan(): Flow<TodayPlan> {
         val now = System.currentTimeMillis()
         return settings.flatMapLatest { settings ->
-            val studyDayEpoch = FirmStudyMachine.todayEpoch(now)
+            val studyDayEpoch = todayEpoch(now)
+            val sessionId = todaySessionId(settings.selectedWordbookId, studyDayEpoch)
             combine(
                 wordDao.observeNewCount(settings.selectedWordbookId),
                 cardDao.observeDueLearningCount(DefaultUserId, settings.selectedWordbookId, now),
                 cardDao.observeDueReviewCount(DefaultUserId, settings.selectedWordbookId, now),
-                todayFsrsSessionDao.observeSessionItemCount(
-                    DefaultUserId,
-                    settings.selectedWordbookId,
-                    studyDayEpoch
-                ),
-                todayFsrsSessionDao.observePendingNewCount(
-                    DefaultUserId,
-                    settings.selectedWordbookId,
-                    studyDayEpoch
-                ),
-                todayFsrsSessionDao.observePendingDueCount(
-                    DefaultUserId,
-                    settings.selectedWordbookId,
-                    studyDayEpoch
-                )
+                learningStateDao.observeStudySessionItemCount(sessionId),
+                learningStateDao.observePendingSessionNewCount(sessionId),
+                learningStateDao.observePendingSessionDueCount(sessionId)
             ) { values: Array<Int> ->
                 val availableNewWords = values[0]
                 val dueCount = values[1] + values[2]
@@ -187,10 +158,9 @@ class DanChiRepository(
             combine(
                 wordDao.observeLearnedTimestamps(wordbookId),
                 reviewDao.observeStudyTimestamps(wordbookId),
-                wordStudyRecordDao.observeStudyTimestamps(wordbookId),
                 wordDao.observeLearnedCount(wordbookId)
-            ) { learnedTimestamps, reviewTimestamps, firmStudyTimestamps, learnedCount ->
-                val studyDays = (learnedTimestamps + reviewTimestamps + firmStudyTimestamps)
+            ) { learnedTimestamps, reviewTimestamps, learnedCount ->
+                val studyDays = (learnedTimestamps + reviewTimestamps)
                     .filter { it > 0L }
                     .map { it.toLocalDate() }
                     .toSet()
@@ -228,10 +198,6 @@ class DanChiRepository(
         return dictionaryRepository.buildWordPatch(word)
     }
 
-    suspend fun buildNewSession(settings: StudySettings): List<Word> {
-        return nextNewWords(settings.selectedWordbookId, settings.dailyNewWords, settings.wordOrder).map { withNote(it) }
-    }
-
     suspend fun buildTodayFsrsSession(
         settings: StudySettings,
         onProgress: suspend (FsrsBuildProgress) -> Unit = {}
@@ -243,9 +209,8 @@ class DanChiRepository(
         val now = System.currentTimeMillis()
         progress(1, "检查今日清单", "如果今天已经生成过，会直接恢复原进度。")
         loadFsrsSettings(settings)
-        val studyDayEpoch = FirmStudyMachine.todayEpoch(now)
+        val studyDayEpoch = todayEpoch(now)
         val sessionId = todaySessionId(settings.selectedWordbookId, studyDayEpoch)
-        todayFsrsSessionDao.deleteOldSessions(DefaultUserId, settings.selectedWordbookId, studyDayEpoch)
 
         learningStateDao.studySessionById(sessionId)?.let { existing ->
             progress(2, "读取已保存清单", "正在恢复未完成题目和学习位置。")
@@ -305,22 +270,6 @@ class DanChiRepository(
             )
         )
         learningStateDao.upsertStudySessionItems(items)
-        todayFsrsSessionDao.upsertAll(
-            items.map { item ->
-                TodayFsrsSessionItemEntity(
-                    userId = DefaultUserId,
-                    wordbookId = settings.selectedWordbookId,
-                    studyDayEpoch = studyDayEpoch,
-                    cardId = item.cardId,
-                    wordId = item.wordId,
-                    position = item.position,
-                    planNewLimit = newLimit,
-                    wordOrder = settings.wordOrder.name,
-                    createdAt = now,
-                    updatedAt = now
-                )
-            }
-        )
         progress(5, "进入今日提分", "首批题目已准备好，后续题目会在后台继续生成。")
         return buildFsrsSessionSnapshot(sessionId, isResumed = false, settings = settings, now = now)
     }
@@ -334,7 +283,7 @@ class DanChiRepository(
         }
 
         val now = System.currentTimeMillis()
-        val studyDayEpoch = FirmStudyMachine.todayEpoch(now)
+        val studyDayEpoch = todayEpoch(now)
         val sessionId = todaySessionId(settings.selectedWordbookId, studyDayEpoch)
         if (!activeFsrsTailBuilds.add(sessionId)) {
             return buildFsrsSessionSnapshot(sessionId, isResumed = true, settings = settings, now = now)
@@ -368,20 +317,6 @@ class DanChiRepository(
             if (appended.isNotEmpty()) {
                 progress(3, "保存后续题目", "正在写入 ${appended.size} 道后续题目和固定选项。")
                 learningStateDao.upsertStudySessionItems(appended)
-                todayFsrsSessionDao.upsertAll(appended.map { item ->
-                    TodayFsrsSessionItemEntity(
-                        userId = DefaultUserId,
-                        wordbookId = settings.selectedWordbookId,
-                        studyDayEpoch = studyDayEpoch,
-                        cardId = item.cardId,
-                        wordId = item.wordId,
-                        position = item.position,
-                        planNewLimit = settings.dailyNewWords.coerceAtLeast(0),
-                        wordOrder = settings.wordOrder.name,
-                        createdAt = now,
-                        updatedAt = now
-                    )
-                })
             }
             progress(4, "后续题目已准备好", "完整今日清单已保存，下次进入会直接恢复。")
             learningStateDao.finishSessionBuild(sessionId, now)
@@ -389,10 +324,6 @@ class DanChiRepository(
         } finally {
             activeFsrsTailBuilds.remove(sessionId)
         }
-    }
-
-    suspend fun buildReviewSession(wordbookId: String, limit: Int): List<Word> {
-        return wordDao.dueWords(wordbookId, System.currentTimeMillis(), limit).map { withNote(it) }
     }
 
     suspend fun answerRecognition(
@@ -428,7 +359,7 @@ class DanChiRepository(
         )
         val wordKey = word.resolvedWordKey()
         val learningWordId = word.resolvedLearningWordId()
-        val sessionId = todaySessionId(word.wordbookId, FirmStudyMachine.todayEpoch(now))
+        val sessionId = todaySessionId(word.wordbookId, todayEpoch(now))
         cardDao.update(
             result.card.toEntity().copy(
                 wordKey = wordKey,
@@ -444,7 +375,6 @@ class DanChiRepository(
             )
         )
         syncWordState(result.card)
-        todayFsrsSessionDao.markCompleted(DefaultUserId, cardId, FirmStudyMachine.todayEpoch(now), now)
         learningStateDao.completeSessionItemByCard(
             sessionId = sessionId,
             cardId = cardId,
@@ -463,205 +393,9 @@ class DanChiRepository(
         val now = System.currentTimeMillis()
         val card = cardDao.getById(cardId) ?: return
         val word = wordDao.getById(card.wordId) ?: return
-        val sessionId = todaySessionId(word.wordbookId, FirmStudyMachine.todayEpoch(now))
+        val sessionId = todaySessionId(word.wordbookId, todayEpoch(now))
         learningStateDao.revealSessionItemByCard(sessionId, cardId, correctOptionId, now)
         learningStateDao.refreshSessionProgress(sessionId, now)
-    }
-
-    suspend fun completeTodayRecognitionItem(cardId: Long) {
-        val now = System.currentTimeMillis()
-        todayFsrsSessionDao.markCompleted(DefaultUserId, cardId, FirmStudyMachine.todayEpoch(now), now)
-        val card = cardDao.getById(cardId) ?: return
-        val word = wordDao.getById(card.wordId) ?: return
-        val sessionId = todaySessionId(word.wordbookId, FirmStudyMachine.todayEpoch(now))
-        learningStateDao.completeSessionItemByCard(
-            sessionId = sessionId,
-            cardId = cardId,
-            answeredAt = now,
-            selectedOptionId = "",
-            durationMs = 0L,
-            result = "completed",
-            cardStateBefore = card.state,
-            cardStateAfter = card.state
-        )
-        learningStateDao.refreshSessionProgress(sessionId, now)
-    }
-
-    suspend fun resumeFirmCardIndex(settings: StudySettings): Int {
-        val now = System.currentTimeMillis()
-        return normalizeActiveRecords(settings, now)
-            .maxOfOrNull { maxOf(it.lastShownCardIndex, it.nextDueCardIndex) }
-            ?: 0
-    }
-
-    suspend fun buildFirmCard(settings: com.danchi.app.domain.StudySettings, currentCardIndex: Int): FirmStudyCard {
-        val now = System.currentTimeMillis()
-        val startOfToday = FirmStudyMachine.startOfToday(now)
-        val todayEpoch = FirmStudyMachine.todayEpoch(now)
-        val normalized = normalizeActiveRecords(settings, now)
-        val activeRecords = normalized.ifEmpty {
-            loadNextFirmRecords(settings, now, startOfToday, todayEpoch)
-        }
-        if (activeRecords.isEmpty()) {
-            return FirmStudyCard(
-                kind = FirmCardKind.Done,
-                todayNewStartedCount = wordStudyRecordDao.countTodayStarted(settings.selectedWordbookId, startOfToday),
-                todayNewLimit = settings.dailyNewWords
-            )
-        }
-
-        val records = if (!settings.enableNewWordPreview) {
-            activeRecords.map {
-                if (it.status == FirmStudyStatus.New && !it.previewSeen) {
-                    it.copy(status = FirmStudyStatus.Intro)
-                } else {
-                    it
-                }
-            }.also { saveRecords(it) }
-        } else {
-            activeRecords
-        }
-
-        val words = wordsFor(records)
-        val groupDone = records.count { FirmStudyMachine.isDoneForToday(it) }
-        val dueLearning = records.firstOrNull { FirmStudyMachine.canShowAgain(it, now, currentCardIndex) }
-        val detail = records.firstOrNull { it.status == FirmStudyStatus.Detail }
-        val previewRecords = records.filter { FirmStudyMachine.shouldShowPreview(it, settings) }
-        val intro = records.firstOrNull { it.status == FirmStudyStatus.Intro || it.status == FirmStudyStatus.New }
-        val reviewDue = records.firstOrNull { it.status == FirmStudyStatus.ReviewDue }
-        val pendingLearning = records
-            .filter { it.status == FirmStudyStatus.Learning }
-            .minByOrNull { it.nextDueAt }
-
-        return when {
-            previewRecords.isNotEmpty() -> FirmStudyCard(
-                kind = FirmCardKind.Preview,
-                previewWords = previewRecords.mapNotNull { words[it.wordId] },
-                previewRecords = previewRecords,
-                groupDoneCount = groupDone,
-                groupTotalCount = records.size,
-                todayNewStartedCount = wordStudyRecordDao.countTodayStarted(settings.selectedWordbookId, startOfToday),
-                todayNewLimit = settings.dailyNewWords
-            )
-            detail != null -> firmCard(FirmCardKind.Detail, detail, words, records, settings, startOfToday, false)
-            dueLearning != null -> firmCard(FirmCardKind.Recall, dueLearning, words, records, settings, startOfToday, false)
-            intro != null -> firmCard(FirmCardKind.Intro, intro, words, records, settings, startOfToday, false)
-            reviewDue != null -> firmCard(FirmCardKind.Recall, reviewDue, words, records, settings, startOfToday, true)
-            pendingLearning != null -> firmCard(FirmCardKind.Recall, pendingLearning, words, records, settings, startOfToday, false)
-            else -> FirmStudyCard(
-                kind = FirmCardKind.Done,
-                todayNewStartedCount = wordStudyRecordDao.countTodayStarted(settings.selectedWordbookId, startOfToday),
-                todayNewLimit = settings.dailyNewWords
-            )
-        }
-    }
-
-    suspend fun completeFirmPreview(wordIds: List<String>) {
-        val now = System.currentTimeMillis()
-        val records = wordStudyRecordDao.getByWordIds(wordIds).map { it.toDomain() }
-        saveRecords(FirmStudyMachine.onGroupPreviewDone(records, now))
-    }
-
-    suspend fun selectFirmChoice(wordId: String, correct: Boolean): Boolean {
-        val record = getOrCreateRecord(wordId)
-        val result = FirmStudyMachine.onChoiceSelected(record, correct, System.currentTimeMillis())
-        saveRecord(result.record)
-        return result.isCorrect
-    }
-
-    suspend fun moveFirmChoiceToDetail(wordId: String) {
-        val record = getOrCreateRecord(wordId)
-        saveRecord(FirmStudyMachine.onChoiceNext(record, System.currentTimeMillis()))
-    }
-
-    suspend fun moveFirmDetailToLearning(wordId: String, currentCardIndex: Int) {
-        val record = getOrCreateRecord(wordId)
-        saveRecord(FirmStudyMachine.onDetailNext(record, System.currentTimeMillis(), currentCardIndex))
-    }
-
-    suspend fun firmRemember(wordId: String, currentCardIndex: Int): WordStudyRecord {
-        val record = getOrCreateRecord(wordId)
-        val now = System.currentTimeMillis()
-        val next = if (record.status == FirmStudyStatus.ReviewDue) {
-            FirmStudyMachine.onReviewRemember(record, now)
-        } else {
-            FirmStudyMachine.onRemember(record, now, currentCardIndex)
-        }
-        saveRecord(next)
-        return next
-    }
-
-    suspend fun firmForget(wordId: String, currentCardIndex: Int): WordStudyRecord {
-        val record = getOrCreateRecord(wordId)
-        val now = System.currentTimeMillis()
-        val next = if (record.status == FirmStudyStatus.ReviewDue) {
-            FirmStudyMachine.onReviewForget(record, now, currentCardIndex)
-        } else {
-            FirmStudyMachine.onForget(record, now, currentCardIndex)
-        }
-        saveRecord(next)
-        return next
-    }
-
-    suspend fun firmTodaySummary(settings: com.danchi.app.domain.StudySettings): FirmTodaySummary {
-        val now = System.currentTimeMillis()
-        val start = FirmStudyMachine.startOfToday(now)
-        val today = FirmStudyMachine.todayEpoch(now)
-        return FirmTodaySummary(
-            todayNewWords = wordStudyRecordDao.countTodayStarted(settings.selectedWordbookId, start),
-            todayReviewWords = wordDao.dueWords(settings.selectedWordbookId, now, settings.reviewLimit).size,
-            todayCompletedWords = wordStudyRecordDao.countCompletedToday(settings.selectedWordbookId, start),
-            todayForgetCount = wordStudyRecordDao.todayForgetCount(settings.selectedWordbookId, today),
-            todayWrongChoiceCount = wordStudyRecordDao.todayWrongChoiceCount(settings.selectedWordbookId, today),
-            previewEnabled = settings.enableNewWordPreview
-        )
-    }
-
-    suspend fun grade(word: Word, grade: ReviewGrade, mode: String = "card", correct: Boolean = grade != ReviewGrade.Again) {
-        val entity = wordDao.getById(word.id) ?: return
-        val next = ReviewScheduler.next(
-            state = ReviewState(
-                status = WordStatus.valueOf(entity.status),
-                dueAt = entity.dueAt,
-                learnedAt = entity.learnedAt,
-                reviewCount = entity.reviewCount,
-                lapseCount = entity.lapseCount,
-                stability = entity.stability,
-                difficulty = entity.difficulty
-            ),
-            grade = grade
-        )
-        val now = System.currentTimeMillis()
-        val nextEntity = entity.copy(
-            status = next.status.name,
-            dueAt = next.dueAt,
-            learnedAt = next.learnedAt,
-            reviewCount = next.reviewCount,
-            lapseCount = next.lapseCount,
-            stability = next.stability,
-            difficulty = next.difficulty,
-            updatedAt = now
-        )
-        wordDao.update(nextEntity)
-        syncLearningWordState(nextEntity)
-        reviewDao.insert(
-            ReviewLogEntity(
-                wordId = word.id,
-                wordKey = entity.resolvedWordKey(),
-                learningWordId = entity.resolvedLearningWordId(),
-                wordbookId = entity.wordbookId,
-                grade = grade.name,
-                mode = mode,
-                correct = correct,
-                createdAt = now
-            )
-        )
-    }
-
-    suspend fun submitSpelling(word: Word, input: String): Boolean {
-        val correct = SpellingJudge.isCorrect(input, word.text)
-        grade(word, if (correct) ReviewGrade.Good else ReviewGrade.Again, "spelling", correct)
-        return correct
     }
 
     suspend fun setFavorite(word: Word, favorite: Boolean) {
@@ -705,23 +439,9 @@ class DanChiRepository(
         )
         syncMasteredWord(masteredWord, now)
         cardDao.deferCards(DefaultUserId, word.id, Long.MAX_VALUE, now)
-        todayFsrsSessionDao.markCompletedByWord(DefaultUserId, word.id, FirmStudyMachine.todayEpoch(now), now)
-        val sessionId = todaySessionId(entity.wordbookId, FirmStudyMachine.todayEpoch(now))
+        val sessionId = todaySessionId(entity.wordbookId, todayEpoch(now))
         learningStateDao.completeSessionItemByWord(sessionId, word.id, now, "mastered")
         learningStateDao.refreshSessionProgress(sessionId, now)
-        val existing = wordStudyRecordDao.getByWordId(word.id)?.toDomain()
-        if (existing != null) {
-            saveRecord(
-                existing.copy(
-                    status = FirmStudyStatus.Mastered,
-                    nextDueAt = Long.MAX_VALUE,
-                    lastShownAt = now,
-                    firstLearnedAt = existing.firstLearnedAt ?: now,
-                    completedTodayAt = existing.completedTodayAt ?: now,
-                    studyDayEpoch = FirmStudyMachine.todayEpoch(now)
-                )
-            )
-        }
     }
 
     suspend fun saveNote(word: Word, body: String) {
@@ -753,7 +473,6 @@ class DanChiRepository(
     suspend fun updateReviewLimit(value: Int) = settingsStore.updateReviewLimit(value)
     suspend fun updateAutoPlayWord(value: Boolean) = settingsStore.updateAutoPlayWord(value)
     suspend fun updateAutoPlayExample(value: Boolean) = settingsStore.updateAutoPlayExample(value)
-    suspend fun updateEnableNewWordPreview(value: Boolean) = settingsStore.updateEnableNewWordPreview(value)
     suspend fun updateDailyMinutes(value: Int) = settingsStore.updateDailyMinutes(value)
     suspend fun updateSelectedWordbook(wordbookId: String) = settingsStore.updateSelectedWordbook(wordbookId)
     suspend fun updateWordOrder(value: StudyWordOrder) = settingsStore.updateWordOrder(value)
@@ -764,12 +483,6 @@ class DanChiRepository(
 
     private suspend fun withNote(entity: WordEntity): Word {
         return entity.toDomain(noteDao.getByWordId(entity.id)?.body)
-    }
-
-    private suspend fun cardsFromSessionRows(rows: List<TodayFsrsSessionItemEntity>): List<SchedulerCard> {
-        if (rows.isEmpty()) return emptyList()
-        val cardById = cardDao.getByIds(rows.map { it.cardId }).associateBy { it.id }
-        return rows.mapNotNull { row -> cardById[row.cardId]?.toSchedulerCard() }
     }
 
     private suspend fun buildFsrsSessionItems(
@@ -974,7 +687,7 @@ class DanChiRepository(
         settings: StudySettings,
         now: Long
     ) {
-        if (session.studyDayEpoch != FirmStudyMachine.todayEpoch(now)) return
+        if (session.studyDayEpoch != todayEpoch(now)) return
         val rows = learningStateDao.studySessionItems(session.id)
         val activeCardIds = rows
             .filter { it.status != "completed" }
@@ -1131,49 +844,6 @@ class DanChiRepository(
         }
     }
 
-    private suspend fun syncTodayStudySession(
-        wordbookId: String,
-        studyDayEpoch: Long,
-        cards: List<SchedulerCard>,
-        now: Long
-    ) {
-        if (cards.isEmpty()) return
-        val sessionId = todaySessionId(wordbookId, studyDayEpoch)
-        val wordById = wordDao.getByIds(cards.map { it.wordId }.distinct()).associateBy { it.id }
-        learningStateDao.upsertStudySession(
-            StudySessionEntity(
-                id = sessionId,
-                wordbookId = wordbookId,
-                planId = LearningKeys.planId(DefaultUserId, wordbookId),
-                studyDayEpoch = studyDayEpoch,
-                mode = LearningKeys.TodayFsrsSessionMode,
-                totalCount = cards.size,
-                startedAt = now,
-                lastActiveAt = now,
-                createdAt = now,
-                updatedAt = now
-            )
-        )
-        learningStateDao.deleteStudySessionItems(sessionId)
-        learningStateDao.upsertStudySessionItems(
-            cards.mapIndexedNotNull { index, card ->
-                val word = wordById[card.wordId] ?: return@mapIndexedNotNull null
-                StudySessionItemEntity(
-                    sessionId = sessionId,
-                    position = index,
-                    wordbookId = wordbookId,
-                    learningWordId = word.resolvedLearningWordId(),
-                    wordKey = word.resolvedWordKey(),
-                    wordId = word.id,
-                    cardId = card.id,
-                    questionType = FsrsCardType.Recognition.value,
-                    createdAt = now,
-                    updatedAt = now
-                )
-            }
-        )
-    }
-
     private suspend fun syncWordState(card: SchedulerCard) {
         val entity = wordDao.getById(card.wordId) ?: return
         val now = System.currentTimeMillis()
@@ -1245,6 +915,14 @@ class DanChiRepository(
             )
         }
         learningStateDao.upsertMasteredWord(word.toMasteredEntity(now, "manual"))
+    }
+
+    private fun todayEpoch(now: Long = System.currentTimeMillis()): Long {
+        val zone = ZoneId.of("Asia/Shanghai")
+        return LocalDate.ofInstant(Instant.ofEpochMilli(now), zone)
+            .atStartOfDay(zone)
+            .toInstant()
+            .toEpochMilli()
     }
 
     private fun todaySessionId(wordbookId: String, studyDayEpoch: Long): String {
@@ -1415,168 +1093,6 @@ class DanChiRepository(
 
     private fun buildAnswerSnapshot(selectedWordId: String, correctWordId: String, options: List<String>): String {
         return "selected=$selectedWordId;correct=$correctWordId;options=${options.joinToString("|")}"
-    }
-
-    private suspend fun normalizeActiveRecords(
-        settings: com.danchi.app.domain.StudySettings,
-        now: Long
-    ): List<WordStudyRecord> {
-        return wordStudyRecordDao.activeRecords(settings.selectedWordbookId)
-            .map { FirmStudyMachine.normalizeForToday(it.toDomain(), now) }
-            .also { saveRecords(it) }
-    }
-
-    private suspend fun loadNextFirmRecords(
-        settings: com.danchi.app.domain.StudySettings,
-        now: Long,
-        startOfToday: Long,
-        todayEpoch: Long
-    ): List<WordStudyRecord> {
-        val remainingNew = (
-            settings.dailyNewWords -
-                wordStudyRecordDao.countTodayStarted(settings.selectedWordbookId, startOfToday)
-            ).coerceAtLeast(0)
-        if (remainingNew > 0) {
-            val newWords = nextNewWords(
-                settings.selectedWordbookId,
-                remainingNew.coerceAtMost(FirmModeConfig.groupSize),
-                settings.wordOrder
-            )
-            if (newWords.isNotEmpty()) {
-                val records = newWords.map {
-                    WordStudyRecord(
-                        wordId = it.id,
-                        status = FirmStudyStatus.New,
-                        requiredRememberCount = FirmModeConfig.requiredRememberCount,
-                        firstLearnedAt = now,
-                        lastShownAt = now,
-                        studyDayEpoch = todayEpoch
-                    )
-                }
-                saveRecords(records)
-                return records
-            }
-        }
-
-        val dueReviewWords = wordDao.dueWords(settings.selectedWordbookId, now, settings.reviewLimit)
-        if (dueReviewWords.isNotEmpty()) {
-            val records = dueReviewWords.map { word ->
-                val existing = wordStudyRecordDao.getByWordId(word.id)?.toDomain()
-                val reviewLevel = existing?.reviewLevel ?: word.reviewCount.coerceAtLeast(1)
-                WordStudyRecord(
-                    wordId = word.id,
-                    status = FirmStudyStatus.ReviewDue,
-                    requiredRememberCount = FirmModeConfig.requiredRememberCount,
-                    previewSeen = true,
-                    reviewLevel = reviewLevel,
-                    intervalDays = existing?.intervalDays ?: FirmStudyMachine.getNextIntervalDays(reviewLevel),
-                    nextDueAt = word.dueAt,
-                    firstLearnedAt = word.learnedAt,
-                    studyDayEpoch = todayEpoch
-                )
-            }
-            saveRecords(records)
-            return records
-        }
-        return emptyList()
-    }
-
-    private suspend fun nextNewWords(
-        wordbookId: String,
-        limit: Int,
-        order: StudyWordOrder
-    ): List<WordEntity> {
-        if (limit <= 0) return emptyList()
-        return when (order) {
-            StudyWordOrder.Random -> wordDao.randomNewWordsForSession(
-                wordbookId = wordbookId,
-                userId = DefaultUserId,
-                cardType = FsrsCardType.Recognition.value,
-                sessionId = "",
-                limit = limit
-            )
-            StudyWordOrder.Alphabetical -> wordDao.nextNewWordsForSession(
-                wordbookId = wordbookId,
-                userId = DefaultUserId,
-                cardType = FsrsCardType.Recognition.value,
-                sessionId = "",
-                limit = limit
-            )
-        }
-    }
-
-    private suspend fun firmCard(
-        kind: FirmCardKind,
-        record: WordStudyRecord,
-        words: Map<String, Word>,
-        groupRecords: List<WordStudyRecord>,
-        settings: com.danchi.app.domain.StudySettings,
-        startOfToday: Long,
-        review: Boolean
-    ): FirmStudyCard {
-        return FirmStudyCard(
-            kind = kind,
-            word = words[record.wordId],
-            record = record,
-            groupDoneCount = groupRecords.count { FirmStudyMachine.isDoneForToday(it) },
-            groupTotalCount = groupRecords.size,
-            todayNewStartedCount = wordStudyRecordDao.countTodayStarted(settings.selectedWordbookId, startOfToday),
-            todayNewLimit = settings.dailyNewWords,
-            isReview = review
-        )
-    }
-
-    private suspend fun wordsFor(records: List<WordStudyRecord>): Map<String, Word> {
-        val ids = records.map { it.wordId }.distinct()
-        return wordDao.getByIds(ids).associate { it.id to withNote(it) }
-    }
-
-    private suspend fun getOrCreateRecord(wordId: String): WordStudyRecord {
-        val now = System.currentTimeMillis()
-        return wordStudyRecordDao.getByWordId(wordId)?.toDomain()
-            ?: WordStudyRecord(
-                wordId = wordId,
-                status = FirmStudyStatus.New,
-                requiredRememberCount = FirmModeConfig.requiredRememberCount,
-                firstLearnedAt = now,
-                studyDayEpoch = FirmStudyMachine.todayEpoch(now)
-            ).also { saveRecord(it) }
-    }
-
-    private suspend fun saveRecords(records: List<WordStudyRecord>) {
-        if (records.isEmpty()) return
-        wordStudyRecordDao.upsertAll(records.map { it.toEntity() })
-        records.forEach { syncWordState(it) }
-    }
-
-    private suspend fun saveRecord(record: WordStudyRecord) {
-        wordStudyRecordDao.upsert(record.toEntity())
-        syncWordState(record)
-    }
-
-    private suspend fun syncWordState(record: WordStudyRecord) {
-        val entity = wordDao.getById(record.wordId) ?: return
-        val now = System.currentTimeMillis()
-        val nextStatus = when (record.status) {
-            FirmStudyStatus.New -> WordStatus.New
-            FirmStudyStatus.Preview,
-            FirmStudyStatus.Intro,
-            FirmStudyStatus.Detail,
-            FirmStudyStatus.Learning,
-            FirmStudyStatus.ReviewDue -> WordStatus.Learning
-            FirmStudyStatus.DayDone -> WordStatus.Review
-            FirmStudyStatus.Mastered -> WordStatus.Mastered
-        }
-        val nextEntity = entity.copy(
-            status = nextStatus.name,
-            dueAt = if (record.nextDueAt > 0L) record.nextDueAt else entity.dueAt,
-            learnedAt = entity.learnedAt ?: record.firstLearnedAt,
-            reviewCount = record.reviewLevel.coerceAtLeast(entity.reviewCount),
-            lapseCount = entity.lapseCount + if (record.todayForgetCount > entity.lapseCount) 0 else 0,
-            updatedAt = now
-        )
-        wordDao.update(nextEntity)
-        syncLearningWordState(nextEntity)
     }
 
     private fun Long.toLocalDate(zoneId: ZoneId = ZoneId.systemDefault()): LocalDate {

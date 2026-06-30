@@ -9,8 +9,6 @@ import com.danchi.app.domain.normalizePos
 import com.danchi.app.domain.normalizeWordMeanings
 import com.danchi.app.domain.Wordbook
 import com.danchi.app.domain.WordStatus
-import com.danchi.app.domain.FirmStudyStatus
-import com.danchi.app.domain.WordStudyRecord
 import com.danchi.app.scheduler.FsrsCardState
 import com.danchi.app.scheduler.FsrsCardType
 import com.danchi.app.scheduler.FsrsRating
@@ -525,30 +523,6 @@ data class CardEntity(
     }
 }
 
-@Entity(
-    tableName = "today_fsrs_session_items",
-    primaryKeys = ["userId", "wordbookId", "studyDayEpoch", "cardId"],
-    indices = [
-        Index(value = ["userId", "wordbookId", "studyDayEpoch", "position"]),
-        Index(value = ["cardId"]),
-        Index(value = ["wordId"]),
-        Index(value = ["completedAt"])
-    ]
-)
-data class TodayFsrsSessionItemEntity(
-    val userId: String = DefaultUserId,
-    val wordbookId: String,
-    val studyDayEpoch: Long,
-    val cardId: Long,
-    val wordId: String,
-    val position: Int,
-    val planNewLimit: Int,
-    val wordOrder: String,
-    val completedAt: Long? = null,
-    val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
-)
-
 @Entity(tableName = "user_fsrs_setting")
 data class UserFsrsSettingEntity(
     @PrimaryKey val userId: String = DefaultUserId,
@@ -585,74 +559,6 @@ data class NoteEntity(
     val body: String,
     val updatedAt: Long = System.currentTimeMillis()
 )
-
-@Entity(tableName = "word_study_records", indices = [Index(value = ["status"]), Index(value = ["nextDueAt"])])
-data class WordStudyRecordEntity(
-    @PrimaryKey val wordId: String,
-    val status: String = FirmStudyStatus.New.name,
-    val todayRememberCount: Int = 0,
-    val requiredRememberCount: Int = 3,
-    val todayForgetCount: Int = 0,
-    val todayWrongChoiceCount: Int = 0,
-    val previewSeen: Boolean = false,
-    val previewSeenAt: Long? = null,
-    val reviewLevel: Int = 0,
-    val intervalDays: Int = 0,
-    val lastShownAt: Long = 0L,
-    val nextDueAt: Long = 0L,
-    val lastShownCardIndex: Int = 0,
-    val nextDueCardIndex: Int = 0,
-    val firstLearnedAt: Long? = null,
-    val lastReviewedAt: Long? = null,
-    val completedTodayAt: Long? = null,
-    val studyDayEpoch: Long = 0L
-) {
-    fun toDomain(): WordStudyRecord {
-        return WordStudyRecord(
-            wordId = wordId,
-            status = runCatching { FirmStudyStatus.valueOf(status) }.getOrDefault(FirmStudyStatus.New),
-            todayRememberCount = todayRememberCount,
-            requiredRememberCount = requiredRememberCount,
-            todayForgetCount = todayForgetCount,
-            todayWrongChoiceCount = todayWrongChoiceCount,
-            previewSeen = previewSeen,
-            previewSeenAt = previewSeenAt,
-            reviewLevel = reviewLevel,
-            intervalDays = intervalDays,
-            lastShownAt = lastShownAt,
-            nextDueAt = nextDueAt,
-            lastShownCardIndex = lastShownCardIndex,
-            nextDueCardIndex = nextDueCardIndex,
-            firstLearnedAt = firstLearnedAt,
-            lastReviewedAt = lastReviewedAt,
-            completedTodayAt = completedTodayAt,
-            studyDayEpoch = studyDayEpoch
-        )
-    }
-}
-
-fun WordStudyRecord.toEntity(): WordStudyRecordEntity {
-    return WordStudyRecordEntity(
-        wordId = wordId,
-        status = status.name,
-        todayRememberCount = todayRememberCount,
-        requiredRememberCount = requiredRememberCount,
-        todayForgetCount = todayForgetCount,
-        todayWrongChoiceCount = todayWrongChoiceCount,
-        previewSeen = previewSeen,
-        previewSeenAt = previewSeenAt,
-        reviewLevel = reviewLevel,
-        intervalDays = intervalDays,
-        lastShownAt = lastShownAt,
-        nextDueAt = nextDueAt,
-        lastShownCardIndex = lastShownCardIndex,
-        nextDueCardIndex = nextDueCardIndex,
-        firstLearnedAt = firstLearnedAt,
-        lastReviewedAt = lastReviewedAt,
-        completedTodayAt = completedTodayAt,
-        studyDayEpoch = studyDayEpoch
-    )
-}
 
 fun SchedulerCard.toEntity(): CardEntity {
     return CardEntity(

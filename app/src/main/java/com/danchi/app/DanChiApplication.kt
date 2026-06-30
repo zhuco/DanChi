@@ -31,6 +31,7 @@ class DanChiApplication : Application() {
             .addMigrations(Migration8To9)
             .addMigrations(Migration9To10)
             .addMigrations(Migration10To11)
+            .addMigrations(Migration11To12)
             .fallbackToDestructiveMigration(false)
             .build()
 
@@ -47,8 +48,6 @@ class DanChiApplication : Application() {
             cardDao = database.cardDao(),
             reviewDao = database.reviewDao(),
             noteDao = database.noteDao(),
-            wordStudyRecordDao = database.wordStudyRecordDao(),
-            todayFsrsSessionDao = database.todayFsrsSessionDao(),
             userFsrsSettingDao = database.userFsrsSettingDao(),
             learningStateDao = database.learningStateDao(),
             dictionaryRepository = dictionaryRepository
@@ -743,6 +742,13 @@ class DanChiApplication : Application() {
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_study_session_items_sessionId_status_position` ON `study_session_items` (`sessionId`, `status`, `position`)")
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_study_session_items_sessionId_wordKey` ON `study_session_items` (`sessionId`, `wordKey`)")
             db.execSQL("CREATE INDEX IF NOT EXISTS `index_study_session_items_sessionId_cardId` ON `study_session_items` (`sessionId`, `cardId`)")
+        }
+    }
+
+    private object Migration11To12 : Migration(11, 12) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("DROP TABLE IF EXISTS `today_fsrs_session_items`")
+            db.execSQL("DROP TABLE IF EXISTS `word_study_records`")
         }
     }
 }

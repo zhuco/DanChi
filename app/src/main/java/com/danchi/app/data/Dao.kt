@@ -4,7 +4,6 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -40,73 +39,8 @@ interface WordDao {
     @Query("SELECT learnedAt FROM words WHERE wordbookId = :wordbookId AND learnedAt IS NOT NULL")
     fun observeLearnedTimestamps(wordbookId: String): Flow<List<Long>>
 
-    @Query("SELECT COUNT(*) FROM words WHERE wordbookId = :wordbookId AND dueAt <= :now AND status IN ('Learning', 'Review')")
-    fun observeDueCount(wordbookId: String, now: Long): Flow<Int>
-
     @Query("SELECT COUNT(*) FROM words WHERE wordbookId = :wordbookId AND isFavorite = 1")
     fun observeFavoriteCount(wordbookId: String): Flow<Int>
-
-    @Query("SELECT * FROM words WHERE wordbookId = :wordbookId AND status = 'New' ORDER BY text COLLATE NOCASE LIMIT :limit")
-    suspend fun nextNewWords(wordbookId: String, limit: Int): List<WordEntity>
-
-    @Query("SELECT * FROM words WHERE wordbookId = :wordbookId AND status = 'New' ORDER BY RANDOM() LIMIT :limit")
-    suspend fun randomNewWords(wordbookId: String, limit: Int): List<WordEntity>
-
-    @Query(
-        """
-        SELECT words.* FROM words
-        LEFT JOIN cards ON cards.wordId = words.id
-            AND cards.userId = :userId
-            AND cards.cardType = :cardType
-        WHERE words.wordbookId = :wordbookId
-            AND words.status = 'New'
-            AND cards.id IS NULL
-        ORDER BY words.text COLLATE NOCASE
-        LIMIT :limit
-        """
-    )
-    suspend fun nextWordsWithoutCard(
-        wordbookId: String,
-        userId: String,
-        cardType: String,
-        limit: Int
-    ): List<WordEntity>
-
-    @Query(
-        """
-        SELECT words.* FROM words
-        LEFT JOIN cards ON cards.wordId = words.id
-            AND cards.userId = :userId
-            AND cards.cardType = :cardType
-        WHERE words.wordbookId = :wordbookId
-            AND words.status = 'New'
-            AND cards.id IS NULL
-        ORDER BY RANDOM()
-        LIMIT :limit
-        """
-    )
-    suspend fun randomWordsWithoutCard(
-        wordbookId: String,
-        userId: String,
-        cardType: String,
-        limit: Int
-    ): List<WordEntity>
-
-    @Query(
-        """
-        SELECT COUNT(*) FROM words
-        LEFT JOIN cards ON cards.wordId = words.id
-            AND cards.userId = :userId
-            AND cards.cardType = :cardType
-        WHERE words.wordbookId = :wordbookId
-            AND words.status = 'New'
-            AND cards.id IS NULL
-        """
-    )
-    fun observeWordsWithoutCardCount(wordbookId: String, userId: String, cardType: String): Flow<Int>
-
-    @Query("SELECT * FROM words WHERE wordbookId = :wordbookId ORDER BY text COLLATE NOCASE")
-    suspend fun candidateWords(wordbookId: String): List<WordEntity>
 
     @Query(
         """
@@ -191,9 +125,6 @@ interface WordDao {
         limit: Int
     ): List<WordEntity>
 
-    @Query("SELECT * FROM words WHERE wordbookId = :wordbookId AND dueAt <= :now AND status IN ('Learning', 'Review') ORDER BY dueAt ASC LIMIT :limit")
-    suspend fun dueWords(wordbookId: String, now: Long, limit: Int): List<WordEntity>
-
     @Query("SELECT * FROM words WHERE wordbookId = :wordbookId AND (text LIKE '%' || :query || '%' OR meaning LIKE '%' || :query || '%') ORDER BY text COLLATE NOCASE LIMIT :limit")
     fun search(wordbookId: String, query: String, limit: Int = 80): Flow<List<WordEntity>>
 
@@ -211,9 +142,6 @@ interface WordDao {
 
     @Query("SELECT * FROM words")
     suspend fun allWords(): List<WordEntity>
-
-    @Query("SELECT * FROM words WHERE wordbookId = :wordbookId ORDER BY text COLLATE NOCASE")
-    suspend fun allByWordbook(wordbookId: String): List<WordEntity>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAll(words: List<WordEntity>): List<Long>
@@ -366,11 +294,31 @@ interface LearningStateDao {
     @Query("SELECT * FROM study_session_items WHERE sessionId = :sessionId ORDER BY position ASC")
     suspend fun studySessionItems(sessionId: String): List<StudySessionItemEntity>
 
+    @Query("SELECT COUNT(*) FROM study_session_items WHERE sessionId = :sessionId")
+    fun observeStudySessionItemCount(sessionId: String): Flow<Int>
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM study_session_items
+        WHERE sessionId = :sessionId
+            AND status != 'completed'
+            AND queueReason = 'new'
+        """
+    )
+    fun observePendingSessionNewCount(sessionId: String): Flow<Int>
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM study_session_items
+        WHERE sessionId = :sessionId
+            AND status != 'completed'
+            AND queueReason != 'new'
+        """
+    )
+    fun observePendingSessionDueCount(sessionId: String): Flow<Int>
+
     @Query("SELECT COALESCE(MAX(position), -1) FROM study_session_items WHERE sessionId = :sessionId")
     suspend fun maxStudySessionPosition(sessionId: String): Int
-
-    @Query("DELETE FROM study_session_items WHERE sessionId = :sessionId")
-    suspend fun deleteStudySessionItems(sessionId: String)
 
     @Query(
         """
@@ -612,12 +560,6 @@ interface ReviewDao {
     @Insert
     suspend fun insert(log: ReviewLogEntity)
 
-    @Query("SELECT COUNT(*) FROM review_logs INNER JOIN words ON words.id = review_logs.wordId WHERE words.wordbookId = :wordbookId AND review_logs.mode = 'spelling'")
-    fun observeSpellingTotal(wordbookId: String): Flow<Int>
-
-    @Query("SELECT COUNT(*) FROM review_logs INNER JOIN words ON words.id = review_logs.wordId WHERE words.wordbookId = :wordbookId AND review_logs.mode = 'spelling' AND review_logs.correct = 1")
-    fun observeSpellingCorrect(wordbookId: String): Flow<Int>
-
     @Query("SELECT review_logs.createdAt FROM review_logs INNER JOIN words ON words.id = review_logs.wordId WHERE words.wordbookId = :wordbookId")
     fun observeStudyTimestamps(wordbookId: String): Flow<List<Long>>
 
@@ -644,9 +586,6 @@ interface ReviewDao {
 interface CardDao {
     @Query("SELECT * FROM cards WHERE id = :cardId LIMIT 1")
     suspend fun getById(cardId: Long): CardEntity?
-
-    @Query("SELECT * FROM cards WHERE id IN (:cardIds)")
-    suspend fun getByIds(cardIds: List<Long>): List<CardEntity>
 
     @Query("SELECT * FROM cards WHERE userId = :userId AND wordId = :wordId AND cardType = :cardType LIMIT 1")
     suspend fun getByWordAndType(userId: String, wordId: String, cardType: String): CardEntity?
@@ -731,20 +670,6 @@ interface CardDao {
 
     @Query(
         """
-        SELECT cards.* FROM cards
-        INNER JOIN words ON words.id = cards.wordId
-        WHERE cards.userId = :userId
-            AND cards.cardType = :cardType
-            AND words.wordbookId = :wordbookId
-            AND cards.state = 'new'
-        ORDER BY cards.createdAt ASC
-        LIMIT :limit
-        """
-    )
-    suspend fun newCards(userId: String, wordbookId: String, cardType: String, limit: Int): List<CardEntity>
-
-    @Query(
-        """
         SELECT COUNT(*) FROM cards
         INNER JOIN words ON words.id = cards.wordId
         WHERE cards.userId = :userId
@@ -767,18 +692,6 @@ interface CardDao {
     )
     fun observeDueReviewCount(userId: String, wordbookId: String, now: Long): Flow<Int>
 
-    @Query(
-        """
-        SELECT COUNT(*) FROM cards
-        INNER JOIN words ON words.id = cards.wordId
-        WHERE cards.userId = :userId
-            AND cards.cardType = :cardType
-            AND words.wordbookId = :wordbookId
-            AND cards.state = 'new'
-        """
-    )
-    fun observeNewCardCount(userId: String, wordbookId: String, cardType: String): Flow<Int>
-
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(card: CardEntity): Long
 
@@ -800,162 +713,12 @@ interface CardDao {
 }
 
 @Dao
-interface TodayFsrsSessionDao {
-    @Query(
-        """
-        SELECT * FROM today_fsrs_session_items
-        WHERE userId = :userId
-            AND wordbookId = :wordbookId
-            AND studyDayEpoch = :studyDayEpoch
-        ORDER BY position ASC
-        """
-    )
-    suspend fun sessionItems(userId: String, wordbookId: String, studyDayEpoch: Long): List<TodayFsrsSessionItemEntity>
-
-    @Query(
-        """
-        SELECT COUNT(*) FROM today_fsrs_session_items
-        WHERE userId = :userId
-            AND wordbookId = :wordbookId
-            AND studyDayEpoch = :studyDayEpoch
-        """
-    )
-    fun observeSessionItemCount(userId: String, wordbookId: String, studyDayEpoch: Long): Flow<Int>
-
-    @Query(
-        """
-        SELECT COUNT(*) FROM today_fsrs_session_items
-        INNER JOIN cards ON cards.id = today_fsrs_session_items.cardId
-        WHERE today_fsrs_session_items.userId = :userId
-            AND today_fsrs_session_items.wordbookId = :wordbookId
-            AND today_fsrs_session_items.studyDayEpoch = :studyDayEpoch
-            AND today_fsrs_session_items.completedAt IS NULL
-            AND cards.state = 'new'
-        """
-    )
-    fun observePendingNewCount(userId: String, wordbookId: String, studyDayEpoch: Long): Flow<Int>
-
-    @Query(
-        """
-        SELECT COUNT(*) FROM today_fsrs_session_items
-        INNER JOIN cards ON cards.id = today_fsrs_session_items.cardId
-        WHERE today_fsrs_session_items.userId = :userId
-            AND today_fsrs_session_items.wordbookId = :wordbookId
-            AND today_fsrs_session_items.studyDayEpoch = :studyDayEpoch
-            AND today_fsrs_session_items.completedAt IS NULL
-            AND cards.state != 'new'
-        """
-    )
-    fun observePendingDueCount(userId: String, wordbookId: String, studyDayEpoch: Long): Flow<Int>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertAll(items: List<TodayFsrsSessionItemEntity>)
-
-    @Query(
-        """
-        UPDATE today_fsrs_session_items
-        SET completedAt = COALESCE(completedAt, :completedAt),
-            updatedAt = :completedAt
-        WHERE userId = :userId
-            AND studyDayEpoch = :studyDayEpoch
-            AND cardId = :cardId
-        """
-    )
-    suspend fun markCompleted(userId: String, cardId: Long, studyDayEpoch: Long, completedAt: Long)
-
-    @Query(
-        """
-        UPDATE today_fsrs_session_items
-        SET completedAt = COALESCE(completedAt, :completedAt),
-            updatedAt = :completedAt
-        WHERE userId = :userId
-            AND studyDayEpoch = :studyDayEpoch
-            AND wordId = :wordId
-        """
-    )
-    suspend fun markCompletedByWord(userId: String, wordId: String, studyDayEpoch: Long, completedAt: Long)
-
-    @Query(
-        """
-        DELETE FROM today_fsrs_session_items
-        WHERE userId = :userId
-            AND wordbookId = :wordbookId
-            AND studyDayEpoch = :studyDayEpoch
-        """
-    )
-    suspend fun deleteSession(userId: String, wordbookId: String, studyDayEpoch: Long)
-
-    @Query(
-        """
-        DELETE FROM today_fsrs_session_items
-        WHERE userId = :userId
-            AND wordbookId = :wordbookId
-            AND studyDayEpoch < :studyDayEpoch
-        """
-    )
-    suspend fun deleteOldSessions(userId: String, wordbookId: String, studyDayEpoch: Long)
-}
-
-@Dao
 interface UserFsrsSettingDao {
     @Query("SELECT * FROM user_fsrs_setting WHERE userId = :userId LIMIT 1")
     suspend fun get(userId: String): UserFsrsSettingEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(setting: UserFsrsSettingEntity)
-}
-
-@Dao
-interface WordStudyRecordDao {
-    @Query("SELECT * FROM word_study_records WHERE wordId = :wordId LIMIT 1")
-    suspend fun getByWordId(wordId: String): WordStudyRecordEntity?
-
-    @Query("SELECT * FROM word_study_records WHERE wordId IN (:wordIds)")
-    suspend fun getByWordIds(wordIds: List<String>): List<WordStudyRecordEntity>
-
-    @Query(
-        """
-        SELECT firstLearnedAt FROM word_study_records
-        INNER JOIN words ON words.id = word_study_records.wordId
-        WHERE words.wordbookId = :wordbookId AND firstLearnedAt IS NOT NULL
-        UNION
-        SELECT completedTodayAt FROM word_study_records
-        INNER JOIN words ON words.id = word_study_records.wordId
-        WHERE words.wordbookId = :wordbookId AND completedTodayAt IS NOT NULL
-        UNION
-        SELECT lastReviewedAt FROM word_study_records
-        INNER JOIN words ON words.id = word_study_records.wordId
-        WHERE words.wordbookId = :wordbookId AND lastReviewedAt IS NOT NULL
-        """
-    )
-    fun observeStudyTimestamps(wordbookId: String): Flow<List<Long>>
-
-    @Query(
-        "SELECT word_study_records.* FROM word_study_records " +
-            "INNER JOIN words ON words.id = word_study_records.wordId " +
-            "WHERE words.wordbookId = :wordbookId " +
-            "AND word_study_records.status IN ('New', 'Preview', 'Intro', 'Detail', 'Learning', 'ReviewDue') " +
-            "ORDER BY word_study_records.firstLearnedAt ASC, word_study_records.lastShownAt ASC"
-    )
-    suspend fun activeRecords(wordbookId: String): List<WordStudyRecordEntity>
-
-    @Query("SELECT COUNT(*) FROM word_study_records INNER JOIN words ON words.id = word_study_records.wordId WHERE words.wordbookId = :wordbookId AND word_study_records.firstLearnedAt >= :startOfToday")
-    suspend fun countTodayStarted(wordbookId: String, startOfToday: Long): Int
-
-    @Query("SELECT COUNT(*) FROM word_study_records INNER JOIN words ON words.id = word_study_records.wordId WHERE words.wordbookId = :wordbookId AND word_study_records.completedTodayAt >= :startOfToday")
-    suspend fun countCompletedToday(wordbookId: String, startOfToday: Long): Int
-
-    @Query("SELECT COALESCE(SUM(word_study_records.todayForgetCount), 0) FROM word_study_records INNER JOIN words ON words.id = word_study_records.wordId WHERE words.wordbookId = :wordbookId AND word_study_records.studyDayEpoch = :todayEpoch")
-    suspend fun todayForgetCount(wordbookId: String, todayEpoch: Long): Int
-
-    @Query("SELECT COALESCE(SUM(word_study_records.todayWrongChoiceCount), 0) FROM word_study_records INNER JOIN words ON words.id = word_study_records.wordId WHERE words.wordbookId = :wordbookId AND word_study_records.studyDayEpoch = :todayEpoch")
-    suspend fun todayWrongChoiceCount(wordbookId: String, todayEpoch: Long): Int
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(record: WordStudyRecordEntity)
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertAll(records: List<WordStudyRecordEntity>)
 }
 
 @Dao
