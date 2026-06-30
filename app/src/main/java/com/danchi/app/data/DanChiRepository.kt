@@ -919,7 +919,9 @@ class DanChiRepository(
 
     private fun todayEpoch(now: Long = System.currentTimeMillis()): Long {
         val zone = ZoneId.of("Asia/Shanghai")
-        return LocalDate.ofInstant(Instant.ofEpochMilli(now), zone)
+        return Instant.ofEpochMilli(now)
+            .atZone(zone)
+            .toLocalDate()
             .atStartOfDay(zone)
             .toInstant()
             .toEpochMilli()
